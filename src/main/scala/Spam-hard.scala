@@ -1,3 +1,7 @@
+import scala.collection.mutable.HashMap
+
+///////////////// HARDER VERSION OF THE SPAM FILTER CHALLENGE //////////////////
+
 /** Marks something you should complete to finish this challenge. */
 object TODO {
   def apply (msg: String): Nothing =
@@ -9,15 +13,17 @@ object Words {
   /** Whether a character is whitespace, for the purposes of this challenge. */
   def isWhite (ch: Char) = Character.isWhitespace(ch)
   /** Converts a character sequence to a stream of words. */
-  def apply (chars: Seq[Char]): Stream[String] =
+  def apply (chars: Seq[Char]): Stream[String] = {
     if (chars.isEmpty)
       Stream.empty
     else if (isWhite(chars.head))
       apply(chars.dropWhile(isWhite(_)))
-    else {
-      val (wordChars,rest) = chars.span(! isWhite(_))
-      Stream.cons(wordChars.foldLeft("")(_ + _),apply(rest))
+    else{
+      val (word,rest) = chars.span(! isWhite(_))
+      Stream.cons(word.foldLeft("")(_ + _), apply(rest))
     }
+
+  }
 }
 
 /**
@@ -32,49 +38,35 @@ object Words {
  * change this class so that unneeded values are recognized as garbage?
  */
 case class Examples (messages: Stream[Char]) {
-  /**
-   * Converts a stream of characters, possibly containing newlines, into a
-   * stream of lines.
-   */
-  private def lines (chars: Stream[Char]): Stream[Stream[Char]] =
-    if (chars.isEmpty)
-      Stream.empty
-    else {
-      val (line,rest) = chars.span(_ != '\n')
-      Stream.cons(
-        line,
-        lines(if (rest.isEmpty) rest else rest.tail))   // .tail: remove newline
+  val lines = getLines(messages, List[List[String]]())
+  private def getLines(messages: Stream[Char], lines: List[List[String]]): List[List[String]] = {
+  messages.span(char => char !='\n') match  {
+      case (Stream(), Stream()) => lines
+      case(currentLine, Stream()) => lines :+ currentLine.mkString.split(" ").toList
+      case(currentLine, restOfLines) => getLines(restOfLines.drop(1), lines :+ currentLine.mkString.split(" ").toList)
     }
-  /** The nonempty lines in `messages`. */
-  private val messageLines: Stream[Stream[Char]] =
-    lines(messages).filterNot(_.isEmpty)
-  /**
-   * Computes the desired information from a stream of lines, as a tuple
-   * `(messageCount,wordCount,occurrenceMap)`.
-   */
-  @scala.annotation.tailrec private def count (
-        lines: Stream[Stream[Char]], soFar: (Int,Int,Map[String,Int])):
-      (Int,Int,Map[String,Int]) =
-    if (lines.isEmpty)
-      soFar
-    else {
-      val words = Words(lines.head)
-      count(
-        lines.tail,
-        (soFar._1 + 1,soFar._2 + words.size,
-          words.foldLeft(soFar._3)((m,w) => m + ((w,m.getOrElse(w,0) + 1)))))
-    }
-  /** Intermediate result from `count`. */
-  private val (numMsgs,numWords,occurrenceMap) =
-    count(messageLines,(0,0,Map.empty))
+  }
+
+  private def getWordsFrequencyHash(wordsToFrequency: HashMap[String, Int], wordsList: List[String]): HashMap[String, Int] =
+  {
+    wordsList.foreach(word =>
+        wordsToFrequency.put(word, wordsToFrequency.getOrElse(word, 0) + 1))
+    wordsToFrequency
+  }
+
+  val wordsFrequencyHashMap = lines.foldLeft(HashMap[String, Int]())(getWordsFrequencyHash(_,_))
+
   /** How many messages in `messages`. */
-  val messageCount: Int = numMsgs
+  val messageCount: Int = lines.size
+  println("number of msg " + messageCount)
+
   /** How many words (including duplicates) in `messages`. */
-  val wordCount: Int = numWords
+  val wordCount: Int = wordsFrequencyHashMap.values.toList.foldLeft(0)(_ + _)
+  println("number of words " + wordCount)
   /** All the words in `messages`. */
-  lazy val dictionary: Set[String] = occurrenceMap.keySet
+  lazy val dictionary: Set[String] = wordsFrequencyHashMap.keySet.toSet
   /** The occurrence count for a word in `messages` (zero if not present). */
-  def occurrences (word: String): Int = occurrenceMap.getOrElse(word,0)
+  def occurrences (word: String): Int = wordsFrequencyHashMap.getOrElse(word, 0)
 }
 
 /**
@@ -84,34 +76,26 @@ case class Examples (messages: Stream[Char]) {
 case class Filter (spam: Examples, ham: Examples) {
   /** Laplacian smoother. */
   val laplaceSmoother = 1.0
-  /** Total message count, adjusted by Laplacian smoothing. */
-  private val smoothedMessageCount = 
-    spam.messageCount + ham.messageCount + laplaceSmoother * 2
-  /** Probability that a message is spam, without looking at the message. */
-  private val spamProb =
-    (spam.messageCount + laplaceSmoother) / smoothedMessageCount
-  /** Probability that a message is ham, without looking at the message. */
-  private val hamProb =
-    (ham.messageCount + laplaceSmoother) / smoothedMessageCount
-  /** Size of overall dictionary (of both spam and ham). */
-  private val dictSize = (spam.dictionary ++ ham.dictionary).size
-  /** The probability that `word` is a message in class `x`. */
-  private def pGiven (word: String, x: Examples): Double =
-    (x.occurrences(word) + laplaceSmoother) /
-      (x.wordCount + laplaceSmoother * dictSize)
   /**
    * The probability that the given message is spam, as a number between zero
    * and one.
    */
+  val smoothedMessagesCount = spam.messageCount + ham.messageCount + 2 * laplaceSmoother
+  val spamProbability = (spam.messageCount + laplaceSmoother)/smoothedMessagesCount
+  val hamProbability =(ham.messageCount + laplaceSmoother)/smoothedMessagesCount
+  val dictionarySize = spam.dictionary.size + ham.dictionary.size
+  def probabilityGivenClassifier(word: String, classifier: Examples): Double = {
+    (classifier.occurrences(word) + laplaceSmoother)/(classifier.wordCount + laplaceSmoother * dictionarySize)
+  }
+
   def isSpam (message: Seq[Char]): Double = {
     val words = Words(message)
-    val pSpam = words.foldLeft(spamProb)(_ * pGiven(_,spam))
-    val pHam = words.foldLeft(hamProb)(_ * pGiven(_,ham))
-    pSpam / (pSpam + pHam)
+    val spamProbabilityGivenWords = words.foldLeft(spamProbability)(_ * probabilityGivenClassifier(_, spam))
+    val hamProbabilityGivenWords = words.foldLeft(hamProbability)(_ * probabilityGivenClassifier(_, ham))
+    spamProbabilityGivenWords/(spamProbabilityGivenWords + hamProbabilityGivenWords)
   }
-  override def toString: String =
-    "spamProb = %3.2f%%   hamProb = %3.2f%%   dictSize = %d".format(
-      spamProb * 100.0,hamProb * 100.0,dictSize)
+  override def toString: String = "spamProb = %3.2f%%   hamProb = %3.2f%%   dictSize = %d".format(
+    spamProbability * 100.0,hamProbability * 100.0,dictionarySize)
 }
 
 /**
